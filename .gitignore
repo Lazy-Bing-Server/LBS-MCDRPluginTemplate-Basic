@@ -133,3 +133,6 @@ dmypy.json
 
 # MCDR
 *.mcdr
+
+# KDE Dolphin
+.directory
