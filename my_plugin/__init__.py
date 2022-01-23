@@ -1,8 +1,10 @@
 from mcdreforged.api.all import *
 
-from my_plugin import my_lib
+from .utils import tr
+from .config import config
+from .core import register_command
 
 
-def on_load(server: PluginServerInterface, old):
-    server.logger.info(server.tr('my_plugin.a_message'))
-    my_lib.do_something()
+def on_load(server: PluginServerInterface, prev_module):
+    server.register_help_message(config.primary_prefix, tr('help.mcdr'))
+    register_command()
