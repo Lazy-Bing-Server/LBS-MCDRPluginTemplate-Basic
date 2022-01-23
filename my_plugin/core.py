@@ -5,7 +5,7 @@ from mcdreforged.api.types import CommandSource
 from mcdreforged.api.rtext import *
 from mcdreforged.api.command import *
 
-from .utils import gl_server, tr, DEBUG
+from .utils import gl_server, tr
 from .config import config
 
 
@@ -54,7 +54,7 @@ def register_command():
 
     debug_nodes: List[AbstractNode] = []
 
-    if DEBUG:
+    if config.is_debug:
         children += debug_nodes
 
     for node in children:
