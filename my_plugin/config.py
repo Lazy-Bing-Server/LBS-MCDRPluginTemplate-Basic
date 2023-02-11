@@ -1,7 +1,7 @@
 from mcdreforged.api.utils import Serializable
 from typing import Union, List
 
-from .utils import gl_server
+from my_plugin.utils import gl_server
 
 
 class PermissionRequirements(Serializable):
