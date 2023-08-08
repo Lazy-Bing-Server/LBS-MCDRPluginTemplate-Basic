@@ -2,12 +2,12 @@ from typing import Union, Iterable, List
 from mcdreforged.api.types import CommandSource
 from mcdreforged.api.command import *
 
-from my_plugin.utils import gl_server, rtr, DEBUG, htr
+from my_plugin.utils import rtr, htr, psi
 from my_plugin.config import config
 
 
 def show_help(source: CommandSource):
-    meta = gl_server.get_self_metadata()
+    meta = psi.get_self_metadata()
     source.reply(
         htr(
             'help.detailed',
@@ -20,7 +20,7 @@ def show_help(source: CommandSource):
 
 
 def reload_self(source: CommandSource):
-    gl_server.reload_plugin(gl_server.get_self_metadata().id)
+    psi.reload_plugin(psi.get_self_metadata().id)
     source.reply(rtr('msg.reloaded'))
 
 
@@ -42,10 +42,10 @@ def register_command():
 
     debug_nodes: List[AbstractNode] = []
 
-    if DEBUG:
+    if config.debug_commands:
         children += debug_nodes
 
     for node in children:
         root_node.then(node)
 
-    gl_server.register_command(root_node)
+    psi.register_command(root_node)

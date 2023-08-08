@@ -1,19 +1,87 @@
+import functools
+import inspect
+import logging
+import os
 import re
 import sys
-import inspect
-import functools
 import threading
+from typing import Optional, Dict, Callable, List
+from typing import Union
 
-from mcdreforged.api.types import ServerInterface, PluginServerInterface
-from mcdreforged.api.rtext import *
 from mcdreforged.api.decorator import FunctionThread
-from typing import Union, Optional, Dict, Callable, List
+from mcdreforged.api.event import MCDRPluginEvents
+from mcdreforged.api.rtext import *
+from mcdreforged.api.types import PluginServerInterface, ServerInterface, MCDReforgedLogger
+
+psi: Optional[PluginServerInterface]
+__si, psi = ServerInterface.get_instance(), None
+if __si is not None:
+    psi = __si.as_plugin_server_interface()
+MessageText: type = Union[str, RTextBase]
 
 
-DEBUG = True
-gl_server: PluginServerInterface = ServerInterface.get_instance().as_plugin_server_interface()
-TRANSLATION_KEY_PREFIX = gl_server.get_self_metadata().id
-MessageText = Union[str, RTextBase]
+class BlossomLogger(MCDReforgedLogger):
+    class NoColorFormatter(logging.Formatter):
+        def formatMessage(self, record) -> str:
+            return self.clean_console_color_code(super().formatMessage(record))
+
+        @staticmethod
+        def clean_console_color_code(text: str) -> str:
+            return re.compile(r'\033\[(\d+(;\d+)?)?m').sub('', text)
+
+    __inst: Optional["BlossomLogger"] = None
+    __verbosity: bool = False
+
+    __SINGLE_FILE_LOG_PATH: Optional[str] = None
+    if psi is not None:
+        __SINGLE_FILE_LOG_PATH = f'{psi.get_self_metadata().id}.log'
+    FILE_FMT: NoColorFormatter = NoColorFormatter(
+        '[%(name)s] [%(asctime)s] [%(threadName)s/%(levelname)s]: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    @classmethod
+    def get_instance(cls) -> "BlossomLogger":
+        if cls.__inst is None:
+            cls.__inst = cls().bind_single_file()
+        return cls.__inst
+
+    @classmethod
+    def set_verbose(cls, verbosity: bool) -> None:
+        cls.__verbosity = verbosity
+        cls.get_instance().debug("Verbose mode enabled")
+
+    @classmethod
+    def get_verbose(cls) -> bool:
+        return cls.__verbosity
+
+    def __init__(self):
+        if psi is not None:
+            super().__init__(psi.get_self_metadata().id)
+            psi.register_event_listener(MCDRPluginEvents.PLUGIN_LOADED, lambda *args, **kwargs: self.unbind_file())
+        else:
+            super().__init__()
+
+    def debug(self, *args, option=None, no_check: bool = False) -> None:
+        return super().debug(*args, option=option, no_check=no_check or self.__verbosity)
+
+    def unbind_file(self) -> None:
+        if self.file_handler is not None:
+            self.removeHandler(self.file_handler)
+            self.file_handler.close()
+            self.file_handler = None
+
+    def bind_single_file(self, file_name: Optional[str] = None) -> "BlossomLogger":
+        if file_name is None:
+            if self.__SINGLE_FILE_LOG_PATH is None:
+                return self
+            file_name = os.path.join(psi.get_data_folder(), self.__SINGLE_FILE_LOG_PATH)
+        self.unbind_file()
+        ensure_dir(os.path.dirname(file_name))
+        self.file_handler = logging.FileHandler(file_name, encoding='UTF-8')
+        self.file_handler.setFormatter(self.FILE_FMT)
+        self.addHandler(self.file_handler)
+        return self
 
 
 def htr(translation_key: str, *args, prefixes: Optional[List[str]] = None, **kwargs) -> RTextMCDRTranslation:
@@ -26,7 +94,7 @@ def htr(translation_key: str, *args, prefixes: Optional[List[str]] = None, **kwa
                     return result
         return None
 
-    def __htr(key: str, *inner_args, **inner_kwargs):
+    def __htr(key: str, *inner_args, **inner_kwargs) -> MessageText:
         original, processed = ntr(key, *inner_args, **inner_kwargs), []
         if not isinstance(original, str):
             return key
@@ -43,41 +111,35 @@ def htr(translation_key: str, *args, prefixes: Optional[List[str]] = None, **kwa
     return rtr(translation_key, *args, **kwargs).set_translator(__htr)
 
 
-def debug_log(text: Union[RTextBase, str]):
-    gl_server.logger.debug(text, no_check=DEBUG)
-
-
-def get_thread_prefix():
-    return to_camel_case(gl_server.get_self_metadata().name, divider='_') + '_'
+def get_thread_prefix() -> str:
+    return to_camel_case(psi.get_self_metadata().name, divider='_') + '_'
 
 
 def rtr(translation_key: str, *args, with_prefix=True, **kwargs) -> RTextMCDRTranslation:
-    prefix = gl_server.get_self_metadata().id + '.'
+    prefix = psi.get_self_metadata().id + '.'
     if with_prefix and not translation_key.startswith(prefix):
         translation_key = f"{prefix}{translation_key}"
-    return gl_server.rtr(translation_key, *args, **kwargs).set_translator(ntr)
+    return psi.rtr(translation_key, *args, **kwargs).set_translator(ntr)
 
 
-def named_thread(arg: Optional[Union[str, Callable]] = None):
+def named_thread(arg: Optional[Union[str, Callable]] = None) -> Callable:
     def wrapper(func):
-        @functools.wraps(func)  # to preserve the origin function information
+        @functools.wraps(func)
         def wrap(*args, **kwargs):
             def try_func():
                 try:
                     return func(*args, **kwargs)
                 finally:
                     if sys.exc_info()[0] is not None:
-                        gl_server.logger.exception('Error running thread {}'.format(threading.current_thread().name))
+                        psi.logger.exception('Error running thread {}'.format(threading.current_thread().name))
 
             prefix = get_thread_prefix()
             thread = FunctionThread(target=try_func, args=[], kwargs={}, name=prefix + thread_name)
             thread.start()
             return thread
 
-        # bring the signature of the func to the wrap function
-        # so inspect.getfullargspec(func) works correctly
         wrap.__signature__ = inspect.signature(func)
-        wrap.original = func  # access this field to get the original function
+        wrap.original = func
         return wrap
 
     # Directly use @new_thread without ending brackets case, e.g. @new_thread
@@ -90,18 +152,23 @@ def named_thread(arg: Optional[Union[str, Callable]] = None):
         return wrapper
 
 
-def ntr(translation_key: str, *args, language: Optional[str] = None,
-        allow_failure: bool = True, **kwargs) -> MessageText:
+def ntr(
+        translation_key: str,
+        *args,
+        language: Optional[str] = None,
+        allow_failure: bool = True,
+        **kwargs
+) -> MessageText:
     try:
-        return gl_server.tr(
+        return psi.tr(
             translation_key, *args, language=language, allow_failure=False, **kwargs
         )
     except (KeyError, ValueError):
-        fallback_language = gl_server.get_mcdr_language()
+        fallback_language = psi.get_mcdr_language()
         try:
             if fallback_language == 'en_us':
                 raise KeyError(translation_key)
-            return gl_server.tr(
+            return psi.tr(
                 translation_key, *args, language='en_us', allow_failure=allow_failure, **kwargs
             )
         except (KeyError, ValueError):
@@ -111,12 +178,12 @@ def ntr(translation_key: str, *args, language: Optional[str] = None,
                     languages.append(item)
             languages = ', '.join(languages)
             if allow_failure:
-                gl_server.logger.error(f'Error translate text "{translation_key}" to language {languages}')
+                psi.logger.error(f'Error translate text "{translation_key}" to language {languages}')
             else:
                 raise KeyError(f'Translation key "{translation_key}" not found with language {languages}')
 
 
-def to_camel_case(string: str, divider: str = ' ', upper: bool = True):
+def to_camel_case(string: str, divider: str = ' ', upper: bool = True) -> str:
     word_list = [capitalize(item) for item in string.split(divider)]
     if not upper:
         first_word_char_list = list(word_list[0])
@@ -125,13 +192,20 @@ def to_camel_case(string: str, divider: str = ' ', upper: bool = True):
     return ''.join(word_list)
 
 
-def capitalize(string: str):
+def capitalize(string: str) -> str:
     char_list = list(string)
     char_list[0] = char_list[0].upper()
     return ''.join(char_list)
 
 
-def dtr(translation_dict: Dict[str, str], *args, **kwargs):
+def ensure_dir(folder: str) -> None:
+    if os.path.isfile(folder):
+        raise FileExistsError('Data folder structure is occupied by existing file')
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+
+
+def dtr(translation_dict: Dict[str, str], *args, **kwargs) -> RTextMCDRTranslation:
     def fake_tr(
             translation_key: str,
             *inner_args,
@@ -140,7 +214,7 @@ def dtr(translation_dict: Dict[str, str], *args, **kwargs):
             **inner_kwargs
     ) -> MessageText:
         result = translation_dict.get(language)
-        fallback_language = [gl_server.get_mcdr_language()]
+        fallback_language = [psi.get_mcdr_language()]
         if 'en_us' not in fallback_language and 'en_us' != language:
             fallback_language.append('en_us')
         for lang in fallback_language:
@@ -158,3 +232,6 @@ def dtr(translation_dict: Dict[str, str], *args, **kwargs):
                             translation_dict, language, ', '.join(fallback_language)))
 
     return RTextMCDRTranslation('', *args, **kwargs).set_translator(fake_tr)
+
+
+logger: BlossomLogger = BlossomLogger.get_instance()
