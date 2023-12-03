@@ -7,10 +7,15 @@ my_plugin:
       §7{prefix}§r Show this help message
       §7{prefix} reload§r Reload this plugin
 
-  msg:
+  loading:
     reloaded: Plugin reloaded
+    reloading_failed: "Error occurred while reloading plugin {id}: "
 
-  config:
-    save_with_default_fmt: Validation during config file saving failed, saved without original format
-    format_failure: There may be mistakes in original config file format, please contact plugin maintainer
-    retry_saving: Attempting saving config with original file format due to validation failure while attempting saving config and keep local config file format
+#  Should contain these keys in other language, locale "en_us" doesn't require these keys
+#  config:
+#    "Fail to read config file, using default config":
+#    "Validation during config file saving failed, saved without original format":
+#    "There may be mistakes in original config file format, please contact plugin maintainer":
+#    "Attempting saving config with original file format due to validation failure while attempting saving config and keep local config file format":
+#    "Fixed invalid config keys with default values, please confirm these values: ":
+#    "Config loaded":
