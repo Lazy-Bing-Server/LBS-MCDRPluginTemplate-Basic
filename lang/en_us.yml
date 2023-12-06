@@ -11,7 +11,7 @@ my_plugin:
     reloaded: Plugin reloaded
     reloading_failed: "Error occurred while reloading plugin {id}: "
 
-#  Should contain these keys in other language, locale "en_us" doesn't require these keys
+#  These keys should be contained in other language, locale "en_us" doesn't require these keys
 #  config:
 #    "Fail to read config file, using default config":
 #    "Validation during config file saving failed, saved without original format":
