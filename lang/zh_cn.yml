@@ -17,4 +17,3 @@ my_plugin:
     "There may be mistakes in original config file format, please contact plugin maintainer": 原始配置文件格式可能存在问题，请联系插件维护者
     "Attempting saving config with original file format due to validation failure while attempting saving config and keep local config file format": 因尝试保留当前配置文件格式进行保存失败，将尝试使用原始格式进行保存
     "Fixed invalid config keys with default values, please confirm these values: ": "已修复以下无效的配置键，请尽快确认这些键值: "
-    "Config loaded": 配置文件已加载

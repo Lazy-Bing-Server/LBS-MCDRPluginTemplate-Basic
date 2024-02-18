@@ -1,18 +1,26 @@
-from typing import Union, List, Optional
+from typing import Union, List, Optional, Any
 
-from my_plugin.utils.misc import psi
-from my_plugin.utils.logger import logger
-from my_plugin.utils.serializer import BlossomSerializable, ConfigurationBase
+from mcdreforged.api.utils import Serializable
 
 
-class PermissionRequirements(BlossomSerializable):
+_NONE = object()
+
+class __Serializable(Serializable):
+    def get(self, key: str, default_value: Any = None):
+        if key not in self.get_field_annotations().keys():
+            return default_value
+        return getattr(self, key, default_value)
+
+
+class PermissionRequirements(__Serializable):
     reload: int = 3
 
     def get_permission(self, cmd: str, default_value: int):
         return self.serialize().get(cmd, default_value)
 
 
-class Configuration(ConfigurationBase):
+# class Configuration(ConfigurationBase):
+class Configuration(__Serializable):
     command_prefix: Union[List[str], str] = '!!template'
     permission_requirements: PermissionRequirements = PermissionRequirements.get_default()
     enable_permission_check: bool = True
@@ -30,14 +38,14 @@ class Configuration(ConfigurationBase):
 
     @property
     def enable_debug_commands(self):
-        return self.serialize().get('debug', False)
+        return self.get('debug', False)
 
     @property
     def is_verbose(self):
-        return self.serialize().get("verbosity", False)
+        return self.get("verbosity", False)
 
-    def after_load(self):
-        logger.set_verbose(self.is_verbose)
+    def after_load(self, plugin_inst):
+        plugin_inst.set_verbose(self.is_verbose)
 
     def get_permission_checker(self, *cmd: str, default_value: int = 0):
         if not self.enable_permission_check:
@@ -47,8 +55,3 @@ class Configuration(ConfigurationBase):
             current_item_perm = self.permission_requirements.get_permission(item, default_value)
             perm = perm if perm >= current_item_perm else current_item_perm
         return lambda src: src.has_permission(perm)
-
-
-config: Optional["Configuration"] = None
-if psi is not None:
-    config = Configuration.load()

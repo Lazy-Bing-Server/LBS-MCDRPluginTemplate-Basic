@@ -1,15 +1,16 @@
 import os
 import shutil
-from typing import List, Optional, Tuple, get_origin, Type
+from typing import List, Optional, Tuple, get_origin, Type, TYPE_CHECKING
 
 from mcdreforged.api.types import CommandSource
 from mcdreforged.api.utils import Serializable, deserialize
 from ruamel import yaml
 
-from my_plugin.utils import file_util
-from my_plugin.utils.logger import ConfigSerializeLogger, logger
-from my_plugin.utils.misc import psi
-from my_plugin.utils.translation import ktr, TRANSLATION_KEY_PREFIX, MessageText
+from my_plugin.constants import TRANSLATION_KEY_PREFIX
+from my_plugin.utils.file_util import FileUtils
+
+if TYPE_CHECKING:
+    from my_plugin.my_plugin import MyPlugin
 
 
 class BlossomSerializable(Serializable):
@@ -69,60 +70,43 @@ class ConfigurationBase(BlossomSerializable):
     def __init__(self, **kwargs):
         self.__file_path = None
         self.__bundled_template_path = None
-        self.__logger: Optional["ConfigSerializeLogger"] = None
         self.__reloader: Optional[CommandSource] = None
+        self.__plugin_inst: Optional["MyPlugin"] = None
         super().__init__(**kwargs)
-
-    @staticmethod
-    def tr(
-        translation_key: str, *args, default_fallback: Optional[MessageText] = None,
-        log_error_message: bool = False, prefix: str = f"{TRANSLATION_KEY_PREFIX}config.", **kwargs
-    ):
-        return ktr(
-            translation_key, *args, default_fallback=default_fallback,
-            log_error_message=log_error_message, prefix=prefix, **kwargs
-        )
 
     def set_reloader(self, source: Optional[CommandSource] = None):
         self.__reloader = source
 
     @property
+    def logger(self):
+        if self.__plugin_inst is not None:
+            return self.__plugin_inst.logger
+        return None
+
+    @property
     def reloader(self):
         return self.__reloader
 
-    @property
-    def logger(self):
-        if self.__logger is None:
-            self.__logger = ConfigSerializeLogger()
-        return self.__logger
-
     def get_template(self) -> yaml.CommentedMap:
         try:
-            with psi.open_bundled_file(self.__bundled_template_path) as f:
+            with self.__plugin_inst.server.open_bundled_file(self.__bundled_template_path) as f:
                 return self.__rt_yaml.load(f)
         except Exception as e:
-            logger.warning("Template not found, is plugin modified?", exc_info=e)
+            self.logger.warning("Template not found, is plugin modified?", exc_info=e)
             return yaml.CommentedMap()
 
-    @staticmethod
-    def get_data_folder():
-        if psi is not None:
-            return psi.get_data_folder()
-        return '.'
-
-    def after_load(self):
+    def after_load(self, plugin_inst: "MyPlugin"):
         pass
 
-    def set_config_path(self, file_path: str, bundled_template_path: Optional[str] = None):
+    def set_config_attr(self, file_path: str, plugin_inst: "MyPlugin", bundled_template_path: Optional[str] = None):
         self.__file_path = file_path
         self.__bundled_template_path = bundled_template_path
-
-    def set_logger(self, logger_: ConfigSerializeLogger):
-        self.__logger = logger_
+        self.__plugin_inst = plugin_inst
 
     @classmethod
     def load(
             cls,
+            plugin_inst: "MyPlugin",
             file_path: str = 'config.yml',
             bundled_template_path: str = os.path.join("resources", "default_cfg.yml"),
             in_data_folder: bool = True,
@@ -130,49 +114,53 @@ class ConfigurationBase(BlossomSerializable):
             source_to_reply: Optional[CommandSource] = None,
             encoding: str = 'utf8'
     ):
-        serialize_logger = ConfigSerializeLogger()
-        with serialize_logger.record_context(verbose=print_to_console, source=source_to_reply):
-            default_config = cls.get_default().serialize()
-            needs_save = False
-            if in_data_folder:
-                file_path = os.path.join(cls.get_data_folder(), file_path)
+        def log(translation_key, *args, _lb_rtr_prefix=TRANSLATION_KEY_PREFIX + 'config.', **kwargs):
+            text = plugin_inst.ktr(translation_key, *args, _lb_rtr_prefix=_lb_rtr_prefix, **kwargs, )
+            if print_to_console:
+                plugin_inst.logger.info(text)
+            if source_to_reply is not None:
+                source_to_reply.reply(text)
 
-            # Load & Fix data
-            try:
-                string = file_util.lf_read(file_path, encoding=encoding)
-                read_data: dict = cls.__safe_yaml.load(string)
-            except Exception as e:
-                # Reading failed, remove current file
-                file_util.delete(file_path)
-                result_config = default_config.copy()
+
+        default_config = cls.get_default().serialize()
+        needs_save = False
+        if in_data_folder:
+            file_path = os.path.join(plugin_inst.get_data_folder(), file_path)
+
+        # Load & Fix data
+        try:
+            string = FileUtils.lf_read(file_path, encoding=encoding)
+            read_data: dict = cls.__safe_yaml.load(string)
+        except:
+            # Reading failed, remove current file
+            FileUtils.delete(file_path)
+            result_config = default_config.copy()
+            needs_save = True
+            log("Fail to read config file, using default config")
+        else:
+            # Reading file succeeded, fix data
+            result_config, nodes_require_save = cls._fix_data(read_data)
+            if len(nodes_require_save) > 0:
                 needs_save = True
-                serialize_logger.warn(cls.tr("Fail to read config file, using default config"), exc_info=e)
-            else:
-                # Reading file succeeded, fix data
-                result_config, nodes_require_save = cls._fix_data(read_data)
-                if len(nodes_require_save) > 0:
-                    needs_save = True
-                    serialize_logger.warn(cls.tr("Fixed invalid config keys with default values, please confirm these values: "))
-                    serialize_logger.warn(', '.join(nodes_require_save))
-            try:
-                # Deserialize into configuration instance, should have raise no exception in theory
-                result_config = cls.deserialize(result_config)
-            except Exception as e:
-                # But if exception is raised, that indicates config definition error
-                result_config = cls.get_default()
-                needs_save = True
-                serialize_logger.warn(cls.tr("Fail to read config file, using default config"), exc_info=e)
+                log("Fixed invalid config keys with default values, please confirm these values: ")
+                log(', '.join(nodes_require_save))
+        try:
+            # Deserialize into configuration instance, should have raise no exception in theory
+            result_config = cls.deserialize(result_config)
+        except:
+            # But if exception is raised, that indicates config definition error
+            result_config = cls.get_default()
+            needs_save = True
+            log("Fail to read config file, using default config")
 
-            result_config.set_logger(logger_=serialize_logger)
-            result_config.set_config_path(file_path=file_path, bundled_template_path=bundled_template_path)
+        result_config.set_config_attr(file_path, plugin_inst, bundled_template_path=bundled_template_path)
+        if needs_save:
+            # Saving config
+            result_config.save(encoding=encoding, print_to_console=print_to_console, source_to_reply=source_to_reply)
 
-            if needs_save:
-                # Saving config
-                result_config.save(encoding=encoding, print_to_console=print_to_console, source_to_reply=source_to_reply)
-
-            result_config.after_load()
-            serialize_logger.info(cls.tr("Config loaded"))
-            return result_config
+        result_config.after_load(plugin_inst)
+        log('server_interface.load_config_simple', _lb_rtr_prefix='', _lb_tr_default_fallback='Config loaded')
+        return result_config
 
     def save(
             self,
@@ -180,6 +168,13 @@ class ConfigurationBase(BlossomSerializable):
             print_to_console: bool = True,
             source_to_reply: Optional[CommandSource] = None
     ):
+        def log(translation_key, *args, _lb_rtr_prefix=TRANSLATION_KEY_PREFIX + 'config.', **kwargs):
+            text = self.__plugin_inst.ktr(translation_key, *args, _lb_rtr_prefix=_lb_rtr_prefix, **kwargs)
+            if print_to_console:
+                self.logger.info(text)
+            if source_to_reply is not None:
+                source_to_reply.reply(text)
+
         file_path = self.__file_path
         config_temp_path = os.path.join(os.path.dirname(file_path), f"temp_{os.path.basename(file_path)}")
 
@@ -187,80 +182,30 @@ class ConfigurationBase(BlossomSerializable):
             shutil.rmtree(file_path)
 
         def _save(safe_dump: bool = False):
-            with self.logger.reply_to_source_context(verbose=print_to_console, source=source_to_reply):
-                if os.path.exists(config_temp_path):
-                    file_util.delete(config_temp_path)
+            if os.path.exists(config_temp_path):
+                FileUtils.delete(config_temp_path)
 
-                config_content = self.serialize()
-                if safe_dump:
-                    with file_util.safe_write(file_path, encoding=encoding) as f:
-                        self.__safe_yaml.dump(config_content, f)
-                    self.logger.warn(self.tr("Validation during config file saving failed, saved without original format"))
+            config_content = self.serialize()
+            if safe_dump:
+                with FileUtils.safe_write(file_path, encoding=encoding) as f:
+                    self.__safe_yaml.dump(config_content, f)
+                self.logger.warning("Validation during config file saving failed, saved without original format")
+            else:
+                formatted_config: yaml.CommentedMap
+                if os.path.isfile(file_path):
+                    formatted_config = self.__rt_yaml.load(FileUtils.lf_read(file_path, encoding=encoding))
                 else:
-                    formatted_config: yaml.CommentedMap
-                    if os.path.isfile(file_path):
-                        formatted_config = self.__rt_yaml.load(file_util.lf_read(file_path, encoding=encoding))
-                    else:
-                        formatted_config = self.get_template()
-                    for key, value in config_content.items():
-                        formatted_config[key] = value
-                    with file_util.safe_write(config_temp_path, encoding=encoding) as f:
-                        self.__rt_yaml.dump(formatted_config, f)
-                    try:
-                        self.deserialize(self.__safe_yaml.load(file_util.lf_read(config_temp_path, encoding=encoding)))
-                    except (TypeError, ValueError) as e:
-                        self.logger.warn(self.tr("Attempting saving config with original file format due to validation failure while attempting saving config and keep local config file format"), exc_info=e)
-                        self.logger.warn(self.tr("There may be mistakes in original config file format, please contact plugin maintainer"))
-                        _save(safe_dump=True)
-                    else:
-                        os.replace(config_temp_path, file_path)
+                    formatted_config = self.get_template()
+                for key, value in config_content.items():
+                    formatted_config[key] = value
+                with FileUtils.safe_write(config_temp_path, encoding=encoding) as f:
+                    self.__rt_yaml.dump(formatted_config, f)
+                try:
+                    self.deserialize(self.__safe_yaml.load(FileUtils.lf_read(config_temp_path, encoding=encoding)))
+                except (TypeError, ValueError):
+                    log("Attempting saving config with original file format due to validation failure while attempting saving config and keep local config file format")
+                    log("There may be mistakes in original config file format, please contact plugin maintainer")
+                    _save(safe_dump=True)
+                else:
+                    os.replace(config_temp_path, file_path)
         _save()
-
-
-"""
-    @classmethod
-    def load(
-            cls,
-            file_path: str = 'config.yml',
-            bundled_template_path: str = os.path.join("resources", "default_cfg.yml"),
-            in_data_folder: bool = True,
-            print_to_console: bool = True,
-            source_to_reply: Optional[CommandSource] = None,
-            encoding: str = 'utf8'
-    ):
-        serialize_logger = ConfigSerializeLogger(verbose=print_to_console, source_to_reply=source_to_reply)
-        default_config = cls.get_default().serialize()
-        needs_save = False
-        if in_data_folder:
-            file_path = os.path.join(psi.get_data_folder(), file_path)
-        try:
-            with open(file_path, encoding='utf8') as file_handler:
-                read_data: dict = yaml.YAML(typ='safe').load(file_handler)
-        except Exception as e:
-            result_config = default_config.copy()
-            needs_save = True
-            cls.log('server_interface.load_config_simple.failed', e)
-        else:
-            result_config = read_data
-            if default_config is not None:
-                # constructing the result config based on the given default config
-                for key, value in default_config.items():
-                    if key not in read_data:
-                        result_config[key] = value
-                        cls.log('server_interface.load_config_simple.key_missed', key, value)
-                        needs_save = True
-            cls.log('server_interface.load_config_simple.succeed')
-
-        try:
-            result_config = cls.deserialize(result_config)
-        except Exception as e:
-            result_config = cls.get_default()
-            needs_save = True
-            cls.log('server_interface.load_config_simple.failed', e)
-
-        if needs_save:
-            result_config.save()
-
-        logger.set_verbose(result_config.is_verbose)
-        return result_config
-"""

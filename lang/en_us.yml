@@ -18,4 +18,3 @@ my_plugin:
 #    "There may be mistakes in original config file format, please contact plugin maintainer":
 #    "Attempting saving config with original file format due to validation failure while attempting saving config and keep local config file format":
 #    "Fixed invalid config keys with default values, please confirm these values: ":
-#    "Config loaded":
